@@ -1,0 +1,216 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Create project files
+        run: |
+          mkdir -p $(dirname app/build.gradle.kts)
+          cat > app/build.gradle.kts <<'AEROEOF'
+          plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
+          android {
+              namespace = "com.aero.tvlauncher"
+              compileSdk = 34
+              defaultConfig { applicationId = "com.aero.tvlauncher"; minSdk = 21; targetSdk = 34; versionCode = 1; versionName = "1.0" }
+              compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          AEROEOF
+          mkdir -p $(dirname app/src/main/AndroidManifest.xml)
+          cat > app/src/main/AndroidManifest.xml <<'AEROEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-feature android:name="android.software.leanback" android:required="false" />
+              <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+              <queries>
+                  <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LEANBACK_LAUNCHER" /></intent>
+                  <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
+              </queries>
+              <application android:label="@string/app_name" android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+                  <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
+                      android:stateNotNeeded="true" android:screenOrientation="landscape">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                          <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          AEROEOF
+          mkdir -p $(dirname app/src/main/java/com/aero/tvlauncher/MainActivity.kt)
+          cat > app/src/main/java/com/aero/tvlauncher/MainActivity.kt <<'AEROEOF'
+          package com.aero.tvlauncher
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.graphics.drawable.Drawable
+          import android.os.Bundle
+          import android.view.LayoutInflater
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.BaseAdapter
+          import android.widget.GridView
+          import android.widget.ImageView
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+              data class App(val label: String, val icon: Drawable, val intent: Intent)
+
+              private lateinit var grid: GridView
+              private var apps: List<App> = emptyList()
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+                  grid = findViewById(R.id.grid)
+                  grid.adapter = Adapter()
+                  grid.setOnItemClickListener { _, _, i, _ -> startActivity(apps[i].intent) }
+                  grid.requestFocus()
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  apps = loadApps()
+                  (grid.adapter as BaseAdapter).notifyDataSetChanged()
+              }
+
+              // Home screen: Back does nothing
+              @Deprecated("Deprecated in Java")
+              override fun onBackPressed() {}
+
+              private fun loadApps(): List<App> {
+                  val pm = packageManager
+                  val found = LinkedHashMap<String, App>()
+                  for (cat in listOf(Intent.CATEGORY_LEANBACK_LAUNCHER, Intent.CATEGORY_LAUNCHER)) {
+                      val q = Intent(Intent.ACTION_MAIN).addCategory(cat)
+                      for (ri in pm.queryIntentActivities(q, 0)) {
+                          val pkg = ri.activityInfo.packageName
+                          if (pkg == packageName || found.containsKey(pkg)) continue
+                          val launch = pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg) ?: continue
+                          launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                          found[pkg] = App(ri.loadLabel(pm).toString(), ri.loadIcon(pm), launch)
+                      }
+                  }
+                  return found.values.sortedBy { it.label.lowercase() }
+              }
+
+              inner class Adapter : BaseAdapter() {
+                  override fun getCount() = apps.size
+                  override fun getItem(p: Int) = apps[p]
+                  override fun getItemId(p: Int) = p.toLong()
+                  override fun getView(p: Int, convert: View?, parent: ViewGroup): View {
+                      val v = convert ?: LayoutInflater.from(this@MainActivity).inflate(R.layout.item_app, parent, false)
+                      v.findViewById<ImageView>(R.id.icon).setImageDrawable(apps[p].icon)
+                      v.findViewById<TextView>(R.id.label).text = apps[p].label
+                      return v
+                  }
+              }
+          }
+          AEROEOF
+          mkdir -p $(dirname app/src/main/res/drawable/aero_bg.xml)
+          cat > app/src/main/res/drawable/aero_bg.xml <<'AEROEOF'
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <gradient android:angle="315" android:startColor="#0B3D7A" android:centerColor="#2E8FD6" android:endColor="#8FE0F5" />
+          </shape>
+          AEROEOF
+          mkdir -p $(dirname app/src/main/res/drawable/tile_bg.xml)
+          cat > app/src/main/res/drawable/tile_bg.xml <<'AEROEOF'
+          <selector xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:state_focused="true" android:drawable="@drawable/tile_focus" />
+              <item android:state_selected="true" android:drawable="@drawable/tile_focus" />
+              <item android:drawable="@drawable/tile_normal" />
+          </selector>
+          AEROEOF
+          mkdir -p $(dirname app/src/main/res/drawable/tile_focus.xml)
+          cat > app/src/main/res/drawable/tile_focus.xml <<'AEROEOF'
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <gradient android:angle="270" android:startColor="#AAFFFFFF" android:endColor="#44BFEFFF" />
+              <stroke android:width="3dp" android:color="#FFFFFFFF" />
+              <corners android:radius="14dp" />
+          </shape>
+          AEROEOF
+          mkdir -p $(dirname app/src/main/res/drawable/tile_normal.xml)
+          cat > app/src/main/res/drawable/tile_normal.xml <<'AEROEOF'
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <gradient android:angle="270" android:startColor="#44FFFFFF" android:endColor="#12FFFFFF" />
+              <stroke android:width="1dp" android:color="#77FFFFFF" />
+              <corners android:radius="14dp" />
+          </shape>
+          AEROEOF
+          mkdir -p $(dirname app/src/main/res/layout/activity_main.xml)
+          cat > app/src/main/res/layout/activity_main.xml <<'AEROEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent" android:layout_height="match_parent"
+              android:orientation="vertical" android:background="@drawable/aero_bg"
+              android:paddingLeft="56dp" android:paddingRight="56dp" android:paddingTop="32dp" android:paddingBottom="24dp">
+              <TextClock android:layout_width="wrap_content" android:layout_height="wrap_content"
+                  android:format12Hour="h:mm a" android:format24Hour="HH:mm"
+                  android:textColor="#FFFFFF" android:textSize="44sp" android:shadowColor="#66000000"
+                  android:shadowDx="0" android:shadowDy="2" android:shadowRadius="6" />
+              <TextClock android:layout_width="wrap_content" android:layout_height="wrap_content"
+                  android:format12Hour="EEEE, d MMMM" android:format24Hour="EEEE, d MMMM"
+                  android:textColor="#E6FFFFFF" android:textSize="20sp" android:layout_marginBottom="20dp" />
+              <GridView android:id="@+id/grid" android:layout_width="match_parent" android:layout_height="match_parent"
+                  android:numColumns="6" android:horizontalSpacing="16dp" android:verticalSpacing="16dp"
+                  android:clipToPadding="false" android:padding="6dp" android:listSelector="@android:color/transparent"
+                  android:stretchMode="columnWidth" android:scrollbars="none" />
+          </LinearLayout>
+          AEROEOF
+          mkdir -p $(dirname app/src/main/res/layout/item_app.xml)
+          cat > app/src/main/res/layout/item_app.xml <<'AEROEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent" android:layout_height="150dp"
+              android:orientation="vertical" android:gravity="center" android:padding="10dp"
+              android:background="@drawable/tile_bg" android:focusable="true">
+              <ImageView android:id="@+id/icon" android:layout_width="72dp" android:layout_height="72dp" />
+              <TextView android:id="@+id/label" android:layout_width="match_parent" android:layout_height="wrap_content"
+                  android:layout_marginTop="10dp" android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                  android:textColor="#FFFFFF" android:textSize="16sp" android:shadowColor="#88000000"
+                  android:shadowDx="0" android:shadowDy="1" android:shadowRadius="3" />
+          </LinearLayout>
+          AEROEOF
+          mkdir -p $(dirname app/src/main/res/values/strings.xml)
+          cat > app/src/main/res/values/strings.xml <<'AEROEOF'
+          <resources><string name="app_name">Aero Launcher</string></resources>
+          AEROEOF
+          mkdir -p $(dirname build.gradle.kts)
+          cat > build.gradle.kts <<'AEROEOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          AEROEOF
+          mkdir -p $(dirname gradle.properties)
+          cat > gradle.properties <<'AEROEOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=false
+          AEROEOF
+          mkdir -p $(dirname settings.gradle.kts)
+          cat > settings.gradle.kts <<'AEROEOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "AeroLauncher"
+          include(":app")
+          AEROEOF
+      - run: gradle assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AeroLauncher-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
